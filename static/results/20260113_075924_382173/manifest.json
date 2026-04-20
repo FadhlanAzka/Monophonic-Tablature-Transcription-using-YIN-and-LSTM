@@ -1,0 +1,10 @@
+{
+  "run_id": "20260113_075924_382173",
+  "model": "best.jit",
+  "wav": "Mission Impossible - Main Theme (Simple Guitar Tab).wav",
+  "csv": "Mission Impossible - Main Theme (Simple Guitar Tab)_lstm_mapped.csv",
+  "tab": "Mission Impossible - Main Theme (Simple Guitar Tab)_lstm_tab.txt",
+  "viz": "Mission Impossible - Main Theme (Simple Guitar Tab)_viz.png",
+  "midi": "Mission Impossible - Main Theme (Simple Guitar Tab)_lstm_mapped.mid",
+  "midi_wav": "Mission Impossible - Main Theme (Simple Guitar Tab)_lstm_mapped_render.wav"
+}

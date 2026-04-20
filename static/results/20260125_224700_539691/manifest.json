@@ -1,0 +1,10 @@
+{
+  "run_id": "20260125_224700_539691",
+  "model": "optuna.jit",
+  "wav": "seven army.wav",
+  "csv": "seven army_lstm_mapped.csv",
+  "tab": "seven army_lstm_tab.txt",
+  "viz": "seven army_viz.png",
+  "midi": "seven army_lstm_mapped.mid",
+  "midi_wav": "seven army_lstm_mapped_render.wav"
+}

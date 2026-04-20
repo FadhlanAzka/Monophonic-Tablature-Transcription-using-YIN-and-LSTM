@@ -1,0 +1,10 @@
+{
+  "run_id": "20260123_094243_245922",
+  "model": "optuna.jit",
+  "wav": "california hotel.wav",
+  "csv": "california hotel_lstm_mapped.csv",
+  "tab": "california hotel_lstm_tab.txt",
+  "viz": "california hotel_viz.png",
+  "midi": "california hotel_lstm_mapped.mid",
+  "midi_wav": "california hotel_lstm_mapped_render.wav"
+}

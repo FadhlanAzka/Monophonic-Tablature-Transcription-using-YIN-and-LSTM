@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <title>YINTAB Result - {{ run_id }}</title>
+    <style>
+      * { box-sizing: border-box; }
+
+      /* ===== Theme tokens (default = dark) ===== */
+      :root {
+        --bg: #0f172a;
+        --text: #e5e7eb;
+        --muted: #9ca3af;
+        --card: #111827;
+        --panel: #020617;         /* pre background */
+        --border-2: #1f2933;      /* pre/img border */
+        --outline: #60a5fa;
+        --link: #60a5fa;
+        --shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
+        --btn-bg: #1f2937;
+        --btn-hover: #374151;
+
+        --toggle-bg: #0b1220;
+        --toggle-border: #1f2937;
+      }
+
+      html[data-theme="light"] {
+        --bg: #f3f4f6;
+        --text: #111827;
+        --muted: #6b7280;
+        --card: #ffffff;
+        --panel: #f9fafb;
+        --border-2: #d1d5db;
+        --outline: #2563eb;
+        --link: #2563eb;
+        --shadow: 0 20px 40px rgba(0, 0, 0, 0.12);
+        --btn-bg: #eef2ff;
+        --btn-hover: #e0e7ff;
+
+        --toggle-bg: #eef2ff;
+        --toggle-border: #d1d5db;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+      }
+
+      .container {
+        background: var(--card);
+        border-radius: 16px;
+        width: 1920px;
+        max-width: 96vw;
+        max-height: 90vh;
+        box-shadow: var(--shadow);
+        padding: 24px 28px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: 4px;
+      }
+
+      .header h1 {
+        margin: 0;
+        font-size: 22px;
+      }
+
+      .header-right {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .header .run-id {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .section { margin-bottom: 4px; }
+
+      .section h2 {
+        margin: 0 0 6px;
+        font-size: 15px;
+        color: var(--text);
+      }
+
+      pre {
+        background: var(--panel);
+        border: 1px solid var(--border-2);
+        border-radius: 10px;
+        padding: 0.75rem;
+        overflow: auto;
+        max-height: 220px;
+        font-size: 25px;
+        line-height: 1.25;
+        color: var(--text);
+      }
+
+      img {
+        border-radius: 12px;
+        border: 1px solid var(--border-2);
+      }
+
+      audio { width: 100%; outline: none; }
+
+      ul { margin: 0; padding-left: 18px; font-size: 13px; }
+
+      a { color: var(--link); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+
+      .footer {
+        margin-top: 4px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .btn-back {
+        padding: 6px 14px;
+        font-size: 12px;
+        border-radius: 999px;
+        border: none;
+        background: var(--btn-bg);
+        color: var(--text);
+        font-weight: 500;
+        cursor: pointer;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        transition: background 0.08s ease, transform 0.08s ease;
+      }
+
+      .btn-back:hover {
+        background: var(--btn-hover);
+        transform: translateY(-0.5px);
+      }
+
+      .scroll-wrapper {
+        flex: 1;
+        overflow-y: auto;
+        padding-right: 2px;
+      }
+
+      /* ===== Theme toggle button ===== */
+      .theme-toggle {
+        border: 1px solid var(--toggle-border);
+        background: var(--toggle-bg);
+        color: var(--text);
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-size: 12px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        user-select: none;
+      }
+
+      .theme-toggle:focus-visible {
+        outline: 1px solid var(--outline);
+        outline-offset: 2px;
+      }
+
+      .theme-icon { font-size: 13px; line-height: 1; }
+    </style>
+  </head>
+
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1></h1>
+        <div class="header-right">
+          <div class="run-id">Run ID: <code>{{ run_id }}</code></div>
+          <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle theme" aria-pressed="false">
+            <span class="theme-icon" id="theme-icon">🌙</span>
+            <span id="theme-label">Dark</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="scroll-wrapper">
+        {% if tab_text %}
+          <div class="section">
+            <h2>Tablature Text</h2>
+            <pre>{{ tab_text }}</pre>
+          </div>
+        {% endif %}
+
+        {% if viz_url %}
+          <div class="section">
+            <h2>Visualization</h2>
+            <img src="{{ viz_url }}" alt="Visualization" style="max-width: 100%; height: auto;" />
+          </div>
+        {% endif %}
+
+        {% if wav_url %}
+          <div class="section">
+            <h2>Audio</h2>
+            <audio controls>
+              <source src="{{ wav_url }}" type="audio/wav" />
+              Browser kamu tidak mendukung elemen audio.
+            </audio>
+          </div>
+        {% endif %}
+
+        {% if midi_wav_url %}
+          <div class="section">
+            <h2>Tablature Audio</h2>
+            <audio controls>
+              <source src="{{ midi_wav_url }}" type="audio/wav" />
+              Browser kamu tidak mendukung elemen audio.
+            </audio>
+          </div>
+        {% endif %}
+
+        <!-- {% if csv_text %}
+          <div class="section">
+            <h2>CSV Preview</h2>
+            <pre>{{ csv_text }}</pre>
+          </div>
+        {% endif %} -->
+
+        <!-- <div class="section">
+          <h2>Downloads</h2>
+          <ul>
+            {% if csv_url %}
+              <li><a href="{{ csv_url }}" download>Download CSV</a></li>
+            {% endif %}
+            {% if tab_url %}
+              <li><a href="{{ tab_url }}" download>Download TAB</a></li>
+            {% endif %}
+            {% if midi_wav_url %}
+              <li><a href="{{ midi_wav_url }}" download>Download Rendered MIDI (WAV)</a></li>
+            {% endif %}
+            {# Optional: tetap boleh download MIDI mentah untuk debugging, tapi tidak ditampilkan player #}
+            {% if midi_url %}
+              <li><a href="{{ midi_url }}" download>Download MIDI</a></li>
+            {% endif %}
+          </ul>
+        </div>
+      </div>-->
+
+      <div class="footer">
+        <span></span>
+        <a href="{{ url_for('index') }}" class="btn-back">← BACK</a>
+      </div>
+    </div>
+
+    <script>
+      // ===== Theme (Light/Dark) =====
+      (function () {
+        const STORAGE_KEY = "yintab_theme";
+        const root = document.documentElement;
+        const btn = document.getElementById("theme-toggle");
+        const icon = document.getElementById("theme-icon");
+        const label = document.getElementById("theme-label");
+
+        const systemPref = () =>
+          window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+            ? "light"
+            : "dark";
+
+        const getTheme = () => {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved === "light" || saved === "dark") return saved;
+          return systemPref();
+        };
+
+        const applyTheme = (theme) => {
+          root.setAttribute("data-theme", theme);
+          const isLight = theme === "light";
+          if (btn) btn.setAttribute("aria-pressed", String(isLight));
+          if (icon) icon.textContent = isLight ? "☀️" : "🌙";
+          if (label) label.textContent = isLight ? "Light" : "Dark";
+        };
+
+        applyTheme(getTheme());
+
+        if (btn) {
+          btn.addEventListener("click", () => {
+            const current = root.getAttribute("data-theme") || "dark";
+            const next = current === "light" ? "dark" : "light";
+            localStorage.setItem(STORAGE_KEY, next);
+            applyTheme(next);
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>

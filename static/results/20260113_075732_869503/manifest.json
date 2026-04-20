@@ -1,0 +1,10 @@
+{
+  "run_id": "20260113_075732_869503",
+  "model": "best.jit",
+  "wav": "C4 Major Diatonic.wav",
+  "csv": "C4 Major Diatonic_lstm_mapped.csv",
+  "tab": "C4 Major Diatonic_lstm_tab.txt",
+  "viz": "C4 Major Diatonic_viz.png",
+  "midi": "C4 Major Diatonic_lstm_mapped.mid",
+  "midi_wav": "C4 Major Diatonic_lstm_mapped_render.wav"
+}

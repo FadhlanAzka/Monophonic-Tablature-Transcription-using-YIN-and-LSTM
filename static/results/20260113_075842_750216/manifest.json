@@ -1,0 +1,10 @@
+{
+  "run_id": "20260113_075842_750216",
+  "model": "best.jit",
+  "wav": "Lifetime Adventure.wav",
+  "csv": "Lifetime Adventure_lstm_mapped.csv",
+  "tab": "Lifetime Adventure_lstm_tab.txt",
+  "viz": "Lifetime Adventure_viz.png",
+  "midi": "Lifetime Adventure_lstm_mapped.mid",
+  "midi_wav": "Lifetime Adventure_lstm_mapped_render.wav"
+}

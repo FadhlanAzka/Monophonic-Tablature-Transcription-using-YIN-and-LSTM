@@ -1,0 +1,10 @@
+{
+  "run_id": "20260123_060916_054996",
+  "model": "optuna.jit",
+  "wav": "dont angry.wav",
+  "csv": "dont angry_lstm_mapped.csv",
+  "tab": "dont angry_lstm_tab.txt",
+  "viz": "dont angry_viz.png",
+  "midi": "dont angry_lstm_mapped.mid",
+  "midi_wav": "dont angry_lstm_mapped_render.wav"
+}

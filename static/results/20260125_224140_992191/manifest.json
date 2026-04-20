@@ -1,0 +1,10 @@
+{
+  "run_id": "20260125_224140_992191",
+  "model": "optuna.jit",
+  "wav": "glass castle.wav",
+  "csv": "glass castle_lstm_mapped.csv",
+  "tab": "glass castle_lstm_tab.txt",
+  "viz": "glass castle_viz.png",
+  "midi": "glass castle_lstm_mapped.mid",
+  "midi_wav": "glass castle_lstm_mapped_render.wav"
+}
