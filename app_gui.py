@@ -42,6 +42,7 @@ from audio_loader import load_audio
 from analysis.beat_tracking import compute_beats
 from analysis.onset_detection import compute_onsets
 from utils.sanitize import ensure_finite
+from core_pipeline import PipelineConfig, run_transcription_pipeline
 
 # Import fungsi core dari app.py
 from app import (
@@ -55,6 +56,7 @@ from app import (
     render_ascii_tab,
     _detect_device,
     normalize_note_to_sharp,
+    NOTE_OUTPUT_COLUMNS,
 )
 
 # visualizer (sama seperti di app.py)
@@ -146,8 +148,12 @@ def run_inference_once(
         onset_times = np.asarray([])
 
     # Pipeline14 (YIN) — sama persis dengan app.py
-    print("[INFO] Menjalankan Pipeline #14 (YIN)...")
-    stable_notes, stable_f0, stable_midi, sample_times = run_pipeline14(y, sr)
+    print("[INFO] Menjalankan Pipeline #14...")
+    stable_notes, stable_f0, stable_midi, sample_times, pitch_diag = run_pipeline14(
+        y,
+        sr,
+        return_diagnostics=True,
+    )
 
     # Visualisasi
     duration = len(y) / sr
@@ -207,12 +213,20 @@ def run_inference_once(
         print(f"[WARN] Modul viz gagal, pakai fallback sederhana. Disimpan: {viz_path} ({e})")
 
     # DataFrame awal
-    df0 = _build_dataframe_from_stable(stable_f0, stable_notes, stable_midi)
+    df0 = _build_dataframe_from_stable(
+        stable_f0,
+        stable_notes,
+        stable_midi,
+        sample_times,
+        pitch_confidence=pitch_diag.get("pitch_confidence"),
+        pitch_mode=pitch_diag.get("pitch_mode", "yin"),
+        octave_corrected=pitch_diag.get("octave_corrected"),
+    )
     if len(df0) == 0:
         print(f"[SKIP] {wav_path.name}: no valid notes")
         out_csv = out_dir / f"{wav_path.stem}_lstm_mapped.csv"
         pd.DataFrame(
-            columns=["hz", "note", "midi", "string", "fret", "token_idx"],
+            columns=NOTE_OUTPUT_COLUMNS,
         ).to_csv(out_csv, index=False, encoding="utf-8-sig")
         print(f"[OK] Empty CSV disimpan ke: {out_csv}")
         return {
@@ -223,12 +237,12 @@ def run_inference_once(
         }
 
     # Collapse sustains
-    df = _collapse_to_sustains(df0)
+    df = _collapse_to_sustains(df0, onset_times=onset_times)
     if len(df) == 0:
         print(f"[SKIP] {wav_path.name}: no sustained notes after RLE")
         out_csv = out_dir / f"{wav_path.stem}_lstm_mapped.csv"
         pd.DataFrame(
-            columns=["hz", "note", "midi", "string", "fret", "token_idx"],
+            columns=NOTE_OUTPUT_COLUMNS,
         ).to_csv(out_csv, index=False, encoding="utf-8-sig")
         print(f"[OK] Empty CSV disimpan ke: {out_csv}")
         return {
@@ -249,7 +263,7 @@ def run_inference_once(
     )
 
     # Simpan CSV
-    cols = ["hz", "note", "midi", "string", "fret", "token_idx"]
+    cols = NOTE_OUTPUT_COLUMNS
     cols = [c for c in cols if c in df_out.columns]
     out_csv = out_dir / f"{wav_path.stem}_lstm_mapped.csv"
     df_out[cols].to_csv(out_csv, index=False, encoding="utf-8-sig")
@@ -279,6 +293,31 @@ def run_inference_once(
         "tab": out_tab,
         "viz": viz_path,
     }
+
+
+def run_inference_once(
+    wav_path: Path,
+    base_out_dir: Path,
+    token_index_csv: Path,
+    model_path: Path,
+    device_str: str = "auto",
+    show_player: bool = True,
+) -> Dict[str, Optional[Path]]:
+    artifacts = run_transcription_pipeline(
+        PipelineConfig(
+            wav_path=wav_path,
+            output_dir=base_out_dir,
+            token_index_csv=token_index_csv,
+            model_path=model_path,
+            device=device_str,
+            create_stem_subdir=True,
+            show_player=show_player,
+            make_midi=False,
+            render_midi_wav=False,
+        ),
+        show_visualization_fn=show_visualization,
+    )
+    return artifacts.as_dict()
 
 
 # ==============================

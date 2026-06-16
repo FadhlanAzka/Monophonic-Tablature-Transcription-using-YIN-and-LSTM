@@ -63,8 +63,8 @@
       .container {
         background: var(--card);
         border-radius: 16px;
-        width: 420px;
-        height: 420px;
+        width: 560px;
+        min-height: 560px;
         box-shadow: var(--shadow);
         padding: 24px 28px;
         display: flex;
@@ -108,6 +108,7 @@
       label { color: var(--text); }
 
       input[type="file"],
+      input[type="number"],
       select {
         font-size: 12px;
         padding: 6px 8px;
@@ -133,9 +134,29 @@
       }
 
       select:focus,
+      input[type="number"]:focus,
       input[type="file"]:focus-visible {
         outline: 1px solid var(--outline);
         outline-offset: 1px;
+      }
+
+      .options-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+
+      .checkbox-row {
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .hint {
+        display: block;
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 2px;
       }
 
       .footer {
@@ -214,11 +235,40 @@
         <div class="form-group">
           <label for="wav-file">
             WAV file
-            <span style="display:block;font-size:11px;color:var(--muted);margin-top:2px;">
+            <span class="hint">
               Klik untuk memilih file atau drag &amp; drop ke kotak ini
             </span>
           </label>
           <input id="wav-file" type="file" name="wav_file" accept=".wav" required />
+        </div>
+
+        <div class="options-grid">
+          <div class="form-group">
+            <label for="pitch-mode">
+              Pitch mode
+              <span class="hint">Phase 4: YIN default, pYIN untuk confidence voiced.</span>
+            </label>
+            <select id="pitch-mode" name="pitch_mode">
+              <option value="yin" selected>YIN (default)</option>
+              <option value="pyin">pYIN</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="pitch-confidence">
+              Confidence threshold
+              <span class="hint">0.0 mempertahankan semua frame.</span>
+            </label>
+            <input id="pitch-confidence" type="number" name="pitch_confidence_threshold" min="0" max="1" step="0.05" value="0.0" />
+          </div>
+        </div>
+
+        <div class="form-group checkbox-row">
+          <input id="tab-optimizer" type="checkbox" name="use_tab_optimizer" value="1" />
+          <label for="tab-optimizer">
+            Enable sequence-aware tablature optimizer
+            <span class="hint">Phase 5: Viterbi decoder untuk fingering yang lebih playable.</span>
+          </label>
         </div>
 
         <div class="footer">

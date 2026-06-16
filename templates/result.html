@@ -121,6 +121,32 @@
       a { color: var(--link); text-decoration: none; }
       a:hover { text-decoration: underline; }
 
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 10px;
+      }
+
+      .stat-card {
+        background: var(--panel);
+        border: 1px solid var(--border-2);
+        border-radius: 10px;
+        padding: 10px 12px;
+      }
+
+      .stat-label {
+        display: block;
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+
+      .stat-value {
+        font-size: 14px;
+        color: var(--text);
+        font-weight: 600;
+      }
+
       .footer {
         margin-top: 4px;
         display: flex;
@@ -195,6 +221,82 @@
       </div>
 
       <div class="scroll-wrapper">
+        {% if options %}
+          <div class="section">
+            <h2>Run Options</h2>
+            <div class="stats-grid">
+              <div class="stat-card">
+                <span class="stat-label">Pitch Mode</span>
+                <span class="stat-value">{{ options.get("pitch_mode", "yin") }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Confidence Threshold</span>
+                <span class="stat-value">{{ options.get("pitch_confidence_threshold", 0.0) }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Tab Optimizer</span>
+                <span class="stat-value">{{ "enabled" if options.get("use_tab_optimizer") else "disabled" }}</span>
+              </div>
+            </div>
+          </div>
+        {% endif %}
+
+        {% if statistics %}
+          <div class="section">
+            <h2>Statistics</h2>
+            <div class="stats-grid">
+              <div class="stat-card">
+                <span class="stat-label">Notes</span>
+                <span class="stat-value">{{ statistics.get("rows", 0) }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Total Duration</span>
+                <span class="stat-value">{{ "%.2f"|format(statistics.get("total_duration_sec", 0) or 0) }} s</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Avg Note Duration</span>
+                <span class="stat-value">{{ "%.3f"|format(statistics.get("avg_note_duration_sec", 0) or 0) }} s</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Unique Notes</span>
+                <span class="stat-value">{{ statistics.get("unique_notes", 0) }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">MIDI Range</span>
+                <span class="stat-value">{{ statistics.get("midi_min", "-") }} - {{ statistics.get("midi_max", "-") }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Fret Range</span>
+                <span class="stat-value">{{ statistics.get("fret_min", "-") }} - {{ statistics.get("fret_max", "-") }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Avg Pitch Confidence</span>
+                <span class="stat-value">{{ "%.3f"|format(statistics.get("avg_pitch_confidence", 0) or 0) }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Onset-Aligned Segments</span>
+                <span class="stat-value">{{ statistics.get("onset_aligned_count", 0) }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Octave Corrections</span>
+                <span class="stat-value">{{ statistics.get("octave_corrected_count", 0) }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Mapping Decoder</span>
+                <span class="stat-value">{{ statistics.get("mapping_decoder", "-") }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">String Usage</span>
+                <span class="stat-value">{{ statistics.get("string_usage", {}) }}</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-label">Segment Sources</span>
+                <span class="stat-value">{{ statistics.get("segment_sources", {}) }}</span>
+              </div>
+            </div>
+          </div>
+        {% endif %}
+
         {% if tab_text %}
           <div class="section">
             <h2>Tablature Text</h2>

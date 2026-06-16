@@ -46,6 +46,11 @@ import matplotlib.pyplot as plt  # untuk summary.png
 import tkinter as tk
 from tkinter import filedialog
 
+try:
+    from evaluation.music_metrics import compute_token_musical_metrics
+except Exception:
+    from music_metrics import compute_token_musical_metrics
+
 
 # =============================================================================
 # 1. PILIH PATH DENGAN TKINTER
@@ -517,6 +522,23 @@ def main():
     print(f"Macro F1        : {macro_f1:.4f}")
     print(f"Weighted F1     : {weighted_f1:.4f}")
 
+    musical_metrics = compute_token_musical_metrics(
+        all_true,
+        all_pred,
+        token_index_df,
+    )
+    print("\n=== MUSICAL METRICS (TOKEN-INDEX MAPPING) ===")
+    for key in (
+        "note_accuracy",
+        "string_accuracy",
+        "fret_accuracy",
+        "string_fret_joint_accuracy",
+        "mean_abs_pitch_error_cent",
+        "tablature_edit_similarity",
+    ):
+        value = musical_metrics.get(key)
+        print(f"{key}: {value if value is None else f'{value:.4f}'}")
+
     # Confusion matrix tetap dihitung untuk info (tidak disimpan)
     cm = confusion_matrix(all_true, all_pred, labels=list(range(num_classes)))
     print("\nConfusion matrix shape:", cm.shape)
@@ -544,6 +566,7 @@ def main():
         "num_classes": int(num_classes),
         "num_tokens_val": int(len(all_true)),
     }
+    summary.update(musical_metrics)
 
     summary_path = os.path.join(eval_dir, "summary.json")
     with open(summary_path, "w") as f:

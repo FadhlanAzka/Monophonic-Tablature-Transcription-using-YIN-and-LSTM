@@ -10,7 +10,7 @@ from tkinter import filedialog
 
 from audio_loader import load_audio
 from preprocessing.hpss_processing import apply_hpss
-from analysis.yin_pitch import compute_yin
+from analysis.yin_pitch import compute_pitch_track
 from analysis.yin_postproc import postprocess_yin
 from analysis.noise_filter import apply_rms_noise_filter
 from analysis.block_sampler import block_sample_pitch
@@ -18,7 +18,19 @@ from analysis.pitch_stabilizer import stabilize_pitch
 from analysis.beat_tracking import compute_beats
 from analysis.onset_detection import compute_onsets
 from utils.sanitize import ensure_finite
-from settings import HOP_LENGTH
+from settings import (
+    HOP_LENGTH,
+    PITCH_DETECTION_MODE,
+    PITCH_CONFIDENCE_THRESHOLD,
+    TAB_OPTIMIZER_ENABLED,
+    TAB_COST_FRET_DISTANCE,
+    TAB_COST_STRING_CHANGE,
+    TAB_COST_LARGE_SHIFT,
+    TAB_LARGE_SHIFT_THRESHOLD,
+    TAB_COST_OPEN_STRING,
+    TAB_COST_POSITION,
+    TAB_PREFERRED_FRET,
+)
 
 try:
     from evaluation.music_theory import midi_to_note_sharp, normalize_note_to_sharp
@@ -40,21 +52,98 @@ except Exception:
         return x
 
 MIN_RUN_LEN = 2
+MIN_NOTE_DURATION_SEC = 0.08
+MIN_REST_DURATION_SEC = 0.08
+ONSET_SPLIT_TOLERANCE_SEC = 0.035
+NOTE_OUTPUT_COLUMNS = [
+    "start_time",
+    "end_time",
+    "duration",
+    "frame_count",
+    "segment_source",
+    "onset_aligned",
+    "pitch_mode",
+    "pitch_confidence",
+    "octave_corrected",
+    "hz",
+    "note",
+    "midi",
+    "string",
+    "fret",
+    "token_idx",
+    "mapping_decoder",
+]
 
 def _build_dataframe_from_stable(
     stable_f0: np.ndarray,
     stable_notes: np.ndarray,
     stable_midi: np.ndarray,
+    sample_times: Optional[np.ndarray] = None,
+    include_rests: bool = False,
+    pitch_confidence: Optional[np.ndarray] = None,
+    pitch_mode: str = PITCH_DETECTION_MODE,
+    octave_corrected: Optional[np.ndarray] = None,
 ) -> pd.DataFrame:
     notes = np.array(
         [normalize_note_to_sharp(n) if isinstance(n, str) else "" for n in stable_notes],
         dtype=object,
     )
+    n_rows = len(stable_f0)
+    if sample_times is None:
+        starts = np.arange(n_rows, dtype=float)
+    else:
+        starts = np.asarray(sample_times, dtype=float)
+        if len(starts) != n_rows:
+            if len(starts) == 0:
+                starts = np.arange(n_rows, dtype=float) * 0.05
+            else:
+                starts = np.resize(starts, n_rows).astype(float)
+
+    if n_rows > 1:
+        diffs = np.diff(starts)
+        positive_diffs = diffs[np.isfinite(diffs) & (diffs > 0)]
+        default_step = float(np.median(positive_diffs)) if len(positive_diffs) else 0.05
+        ends = np.empty(n_rows, dtype=float)
+        ends[:-1] = starts[1:]
+        ends[-1] = starts[-1] + default_step
+    elif n_rows == 1:
+        ends = starts + 0.05
+    else:
+        ends = np.asarray([], dtype=float)
+
+    durations = np.maximum(0.0, ends - starts)
+    if pitch_confidence is None or len(pitch_confidence) != n_rows:
+        confidence = np.where(np.isfinite(stable_midi), 1.0, 0.0)
+    else:
+        confidence = np.asarray(pitch_confidence, dtype=float)
+        confidence = np.nan_to_num(confidence, nan=0.0, posinf=0.0, neginf=0.0)
+
+    if octave_corrected is None or len(octave_corrected) != n_rows:
+        octave_flags = np.zeros(n_rows, dtype=bool)
+    else:
+        octave_flags = np.asarray(octave_corrected, dtype=bool)
+
     df = pd.DataFrame({
+        "start_time": starts,
+        "end_time": ends,
+        "duration": durations,
+        "frame_count": np.ones(n_rows, dtype=int),
+        "segment_source": "frame",
+        "onset_aligned": False,
+        "pitch_mode": str(pitch_mode),
+        "pitch_confidence": confidence,
+        "octave_corrected": octave_flags,
         "hz": stable_f0.astype(float),
         "note": notes,
         "midi": stable_midi.astype(float),
     })
+    if include_rests:
+        invalid = ~(np.isfinite(df["midi"]) & (df["note"] != "N/A"))
+        df.loc[invalid, "note"] = "REST"
+        df.loc[invalid, "hz"] = np.nan
+        df.loc[invalid, "midi"] = np.nan
+        return df.reset_index(drop=True)
+
     mask = np.isfinite(df["midi"]) & (df["note"] != "N/A")
     return df[mask].reset_index(drop=True)
 
@@ -62,41 +151,102 @@ def _build_dataframe_from_stable(
 def _collapse_to_sustains(
     df: pd.DataFrame,
     min_run: int = MIN_RUN_LEN,
+    onset_times: Optional[np.ndarray] = None,
+    onset_tolerance: float = ONSET_SPLIT_TOLERANCE_SEC,
+    min_note_duration: float = MIN_NOTE_DURATION_SEC,
+    min_rest_duration: float = MIN_REST_DURATION_SEC,
 ) -> pd.DataFrame:
     if len(df) == 0:
         return df
 
     midi_int = pd.to_numeric(df["midi"], errors="coerce").round().astype("Int64")
-    boundary = midi_int.ne(midi_int.shift(1))
+    pitch_boundary = midi_int.ne(midi_int.shift(1))
+    has_timing = {"start_time", "end_time", "duration"}.issubset(df.columns)
+
+    onset_boundary = pd.Series(False, index=df.index)
+    onset_aligned = pd.Series(False, index=df.index)
+    if has_timing and onset_times is not None:
+        onset_arr = np.asarray(onset_times, dtype=float)
+        onset_arr = onset_arr[np.isfinite(onset_arr)]
+        if len(onset_arr):
+            starts = pd.to_numeric(df["start_time"], errors="coerce").to_numpy(dtype=float)
+            ends = pd.to_numeric(df["end_time"], errors="coerce").to_numpy(dtype=float)
+            for i, (start, end) in enumerate(zip(starts, ends)):
+                if not np.isfinite(start) or not np.isfinite(end):
+                    continue
+                near = onset_arr[
+                    (onset_arr >= start - float(onset_tolerance))
+                    & (onset_arr < end + float(onset_tolerance))
+                ]
+                if len(near):
+                    onset_aligned.iloc[i] = True
+                    if i > 0 and not bool(pitch_boundary.iloc[i]):
+                        prev_start = starts[i - 1] if i - 1 < len(starts) else np.nan
+                        if np.isfinite(prev_start) and np.min(np.abs(near - prev_start)) > float(onset_tolerance):
+                            onset_boundary.iloc[i] = True
+
+    boundary = pitch_boundary | onset_boundary
     run_id = boundary.cumsum()
 
     df_tmp = df.copy()
     df_tmp["run_id"] = run_id.values
+    df_tmp["onset_aligned"] = onset_aligned.values
+    df_tmp["segment_source"] = np.where(onset_boundary.values, "onset", "pitch")
 
     lens = df_tmp.groupby("run_id", sort=False).size()
-    valid_ids = lens[lens >= int(min_run)].index
+    run_has_onset = df_tmp.groupby("run_id", sort=False)["onset_aligned"].any()
+    valid_ids = lens[(lens >= int(min_run)) | run_has_onset].index
     if len(valid_ids) == 0:
-        return pd.DataFrame(columns=["hz", "note", "midi"])
+        return pd.DataFrame(columns=["start_time", "end_time", "duration", "frame_count", "segment_source", "onset_aligned", "pitch_mode", "pitch_confidence", "octave_corrected", "hz", "note", "midi"])
 
     df_valid = df_tmp[df_tmp["run_id"].isin(valid_ids)]
 
-    agg = (
-        df_valid
-        .assign(
-            hz_num=pd.to_numeric(df_valid["hz"], errors="coerce"),
-            midi_num=pd.to_numeric(df_valid["midi"], errors="coerce"),
-        )
-        .groupby("run_id", sort=False)
-        .agg(
-            hz=("hz_num", lambda s: float(np.nanmedian(s))),
-            midi=("midi_num", lambda s: float(np.nanmedian(s))),
-        )
-        .reset_index(drop=True)
+    df_work = df_valid.assign(
+        hz_num=pd.to_numeric(df_valid["hz"], errors="coerce"),
+        midi_num=pd.to_numeric(df_valid["midi"], errors="coerce"),
     )
+
+    agg_map = {
+        "hz": ("hz_num", lambda s: float(np.nanmedian(s))),
+        "midi": ("midi_num", lambda s: float(np.nanmedian(s))),
+        "frame_count": ("midi_num", "size"),
+        "segment_source": ("segment_source", lambda s: "onset" if (s == "onset").any() else "pitch"),
+        "onset_aligned": ("onset_aligned", "any"),
+    }
+    if "pitch_mode" in df_valid.columns:
+        agg_map["pitch_mode"] = ("pitch_mode", lambda s: str(s.iloc[0]))
+    if "pitch_confidence" in df_valid.columns:
+        df_work = df_work.assign(
+            pitch_confidence_num=pd.to_numeric(df_valid["pitch_confidence"], errors="coerce")
+        )
+        agg_map["pitch_confidence"] = ("pitch_confidence_num", lambda s: float(np.nanmean(s)))
+    if "octave_corrected" in df_valid.columns:
+        agg_map["octave_corrected"] = ("octave_corrected", "any")
+    if has_timing:
+        df_work = df_work.assign(
+            start_time_num=pd.to_numeric(df_valid["start_time"], errors="coerce"),
+            end_time_num=pd.to_numeric(df_valid["end_time"], errors="coerce"),
+            duration_num=pd.to_numeric(df_valid["duration"], errors="coerce"),
+        )
+        agg_map.update({
+            "start_time": ("start_time_num", "min"),
+            "end_time": ("end_time_num", "max"),
+            "duration": ("duration_num", "sum"),
+        })
+
+    agg = df_work.groupby("run_id", sort=False).agg(**agg_map).reset_index(drop=True)
 
     agg["midi"] = agg["midi"].round()
     agg["note"] = agg["midi"].apply(midi_to_note_sharp)
-    return agg[["hz", "note", "midi"]]
+    if has_timing:
+        agg["duration"] = np.maximum(0.0, agg["end_time"] - agg["start_time"])
+        min_duration = np.where(agg["note"].eq("REST"), float(min_rest_duration), float(min_note_duration))
+        duration_mask = (agg["duration"] >= min_duration) | agg["onset_aligned"].astype(bool)
+        agg = agg[duration_mask].reset_index(drop=True)
+        cols = ["start_time", "end_time", "duration", "frame_count", "segment_source", "onset_aligned", "pitch_mode", "pitch_confidence", "octave_corrected", "hz", "note", "midi"]
+        return agg[[c for c in cols if c in agg.columns]]
+    cols = ["frame_count", "segment_source", "onset_aligned", "pitch_mode", "pitch_confidence", "octave_corrected", "hz", "note", "midi"]
+    return agg[[c for c in cols if c in agg.columns]]
 
 
 def _save_basic_visualization(
@@ -135,17 +285,61 @@ def _save_basic_visualization(
     plt.close(fig)
 
 
+def _block_sample_values(times: np.ndarray, values: np.ndarray, sample_times: np.ndarray, default=np.nan) -> np.ndarray:
+    if values is None or len(values) == 0 or len(sample_times) == 0:
+        return np.full(len(sample_times), default)
+
+    times = np.asarray(times, dtype=float)
+    values = np.asarray(values)
+    if len(times) != len(values):
+        values = np.resize(values, len(times))
+
+    if len(sample_times) > 1:
+        block_len = float(np.median(np.diff(sample_times)))
+        if not np.isfinite(block_len) or block_len <= 0:
+            block_len = 0.05
+    else:
+        block_len = 0.05
+
+    out = []
+    for t0 in sample_times:
+        t1 = t0 + block_len
+        idx = np.where((times >= t0) & (times < t1))[0]
+        if len(idx) == 0:
+            out.append(default)
+            continue
+        block_vals = values[idx]
+        if block_vals.dtype == bool:
+            out.append(bool(np.any(block_vals)))
+            continue
+        block_vals = block_vals.astype(float, copy=False)
+        block_vals = block_vals[np.isfinite(block_vals)]
+        out.append(float(np.nanmean(block_vals)) if len(block_vals) else default)
+    return np.asarray(out)
+
+
 # =========================
 #  Core Pipeline #14
 # =========================
-def run_pipeline14(y: np.ndarray, sr: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def run_pipeline14(
+    y: np.ndarray,
+    sr: int,
+    pitch_mode: str = PITCH_DETECTION_MODE,
+    confidence_threshold: float = PITCH_CONFIDENCE_THRESHOLD,
+    return_diagnostics: bool = False,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     try:
         hpss_out = apply_hpss(y, sr)
     except TypeError:
         hpss_out = apply_hpss(y)
     y_harm = hpss_out[0] if isinstance(hpss_out, (list, tuple)) else hpss_out
 
-    f0_raw, times, _ = compute_yin(y_harm, sr)
+    pitch = compute_pitch_track(y_harm, sr, mode=pitch_mode)
+    f0_raw = pitch["f0"].copy()
+    times = pitch["times"]
+    confidence = np.asarray(pitch["confidence"], dtype=float)
+    if confidence_threshold > 0:
+        f0_raw[confidence < float(confidence_threshold)] = np.nan
 
     f0_nf = apply_rms_noise_filter(y_harm, sr, f0_raw, hop_length=HOP_LENGTH)
 
@@ -168,7 +362,20 @@ def run_pipeline14(y: np.ndarray, sr: int) -> Tuple[np.ndarray, np.ndarray, np.n
         hop_length=HOP_LENGTH,
     )
 
+    sample_confidence = _block_sample_values(times, confidence, sample_times, default=0.0)
+    sample_raw_f0 = _block_sample_values(times, f0_nf, sample_times, default=np.nan)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        octave_delta = np.abs(np.log2(sample_f0 / sample_raw_f0))
+    octave_corrected = np.isfinite(octave_delta) & (octave_delta >= 0.5)
+
     stable_notes, stable_f0, stable_midi = stabilize_pitch(sample_times, sample_f0)
+    if return_diagnostics:
+        diagnostics = {
+            "pitch_mode": pitch["mode"],
+            "pitch_confidence": sample_confidence,
+            "octave_corrected": octave_corrected,
+        }
+        return stable_notes, stable_f0, stable_midi, sample_times, diagnostics
     return stable_notes, stable_f0, stable_midi, sample_times
 
 def pick_wav_file() -> Optional[Path]:
@@ -374,12 +581,121 @@ def _apply_pitch_mask_for_sequence(
 
     return logits
 
+
+def _transition_playability_cost(
+    prev_string: float,
+    prev_fret: float,
+    curr_string: float,
+    curr_fret: float,
+) -> float:
+    if not all(np.isfinite([prev_string, prev_fret, curr_string, curr_fret])):
+        return 0.0
+
+    fret_delta = abs(float(curr_fret) - float(prev_fret))
+    string_delta = abs(float(curr_string) - float(prev_string))
+    large_shift = max(0.0, fret_delta - float(TAB_LARGE_SHIFT_THRESHOLD))
+
+    return (
+        float(TAB_COST_FRET_DISTANCE) * fret_delta
+        + float(TAB_COST_STRING_CHANGE) * string_delta
+        + float(TAB_COST_LARGE_SHIFT) * large_shift
+    )
+
+
+def _state_playability_cost(string_val: float, fret_val: float) -> float:
+    if not np.isfinite(fret_val):
+        return 0.0
+
+    open_string_cost = float(TAB_COST_OPEN_STRING) if int(round(float(fret_val))) == 0 else 0.0
+    position_cost = float(TAB_COST_POSITION) * abs(float(fret_val) - float(TAB_PREFERRED_FRET))
+    return open_string_cost + position_cost
+
+
+def _viterbi_decode_tablature(
+    logits: torch.Tensor,
+    token_index_df: pd.DataFrame,
+) -> Optional[np.ndarray]:
+    if logits.dim() == 3:
+        logits = logits.squeeze(0)
+    if logits.dim() != 2:
+        return None
+
+    scores = torch.log_softmax(logits, dim=-1).detach().cpu().numpy()
+    T, C = scores.shape
+    if T == 0 or C == 0:
+        return np.asarray([], dtype=int)
+
+    idx = pd.Index(range(C), name=token_index_df.index.name)
+    tok = token_index_df.reindex(idx)
+    string_col = tok["string"] if "string" in tok.columns else pd.Series(np.nan, index=tok.index)
+    fret_col = tok["fret"] if "fret" in tok.columns else pd.Series(np.nan, index=tok.index)
+    strings = pd.to_numeric(string_col, errors="coerce").to_numpy(dtype=float)
+    frets = pd.to_numeric(fret_col, errors="coerce").to_numpy(dtype=float)
+    has_position = np.isfinite(strings) & np.isfinite(frets)
+    if not has_position.any():
+        return None
+
+    candidates: List[np.ndarray] = []
+    for t in range(T):
+        valid = np.where(np.isfinite(scores[t]) & (scores[t] > -1e8) & has_position)[0]
+        if len(valid) == 0:
+            valid = np.asarray([int(np.nanargmax(scores[t]))], dtype=int)
+        candidates.append(valid)
+
+    dp: List[np.ndarray] = []
+    back: List[np.ndarray] = []
+
+    first = candidates[0]
+    first_scores = np.asarray([
+        scores[0, tok_idx] - _state_playability_cost(strings[tok_idx], frets[tok_idx])
+        for tok_idx in first
+    ], dtype=float)
+    dp.append(first_scores)
+    back.append(np.full(len(first), -1, dtype=int))
+
+    for t in range(1, T):
+        curr = candidates[t]
+        prev = candidates[t - 1]
+        curr_scores = np.full(len(curr), -np.inf, dtype=float)
+        curr_back = np.full(len(curr), -1, dtype=int)
+
+        for j, curr_idx in enumerate(curr):
+            state_cost = _state_playability_cost(strings[curr_idx], frets[curr_idx])
+            best_score = -np.inf
+            best_prev_pos = -1
+            for i, prev_idx in enumerate(prev):
+                trans_cost = _transition_playability_cost(
+                    strings[prev_idx],
+                    frets[prev_idx],
+                    strings[curr_idx],
+                    frets[curr_idx],
+                )
+                score = dp[t - 1][i] + scores[t, curr_idx] - state_cost - trans_cost
+                if score > best_score:
+                    best_score = score
+                    best_prev_pos = i
+            curr_scores[j] = best_score
+            curr_back[j] = best_prev_pos
+
+        dp.append(curr_scores)
+        back.append(curr_back)
+
+    pred_positions = np.zeros(T, dtype=int)
+    pred_positions[-1] = int(np.nanargmax(dp[-1]))
+    for t in range(T - 1, 0, -1):
+        pred_positions[t - 1] = back[t][pred_positions[t]]
+
+    preds = np.asarray([candidates[t][pred_positions[t]] for t in range(T)], dtype=int)
+    return preds
+
+
 def _run_lstm_mapping(
     df_notes: pd.DataFrame,
     model,
     token_index_df: pd.DataFrame,
     device: str,
     use_pitch_mask: bool = True,
+    use_sequence_optimizer: bool = TAB_OPTIMIZER_ENABLED,
 ) -> pd.DataFrame:
     if len(df_notes) == 0:
         return df_notes.copy()
@@ -421,8 +737,17 @@ def _run_lstm_mapping(
                     "[WARN] Kolom 'midi' tidak tersedia di token_index_df; "
                 )
 
-        preds = logits.argmax(dim=-1)
-        preds = preds.squeeze(0).cpu().numpy()
+        decoder_name = "argmax"
+        if use_sequence_optimizer:
+            opt_preds = _viterbi_decode_tablature(logits, token_index_df)
+            if opt_preds is not None and len(opt_preds) == T:
+                preds = opt_preds
+                decoder_name = "viterbi"
+            else:
+                preds = logits.argmax(dim=-1).squeeze(0).cpu().numpy()
+                decoder_name = "argmax_fallback"
+        else:
+            preds = logits.argmax(dim=-1).squeeze(0).cpu().numpy()
 
     if len(preds) != len(df_notes):
         raise RuntimeError(
@@ -432,6 +757,7 @@ def _run_lstm_mapping(
 
     df_out = df_notes.copy()
     df_out["token_idx"] = preds.astype(int)
+    df_out["mapping_decoder"] = decoder_name
 
     df_out["string"] = df_out["token_idx"].map(token_index_df["string"])
     df_out["fret"] = df_out["token_idx"].map(token_index_df["fret"])
@@ -487,8 +813,12 @@ def run_app() -> None:
         print(f"[WARN] compute_onsets gagal: {e}")
         onset_times = np.asarray([])
 
-    print("[INFO] Menjalankan Pipeline #14 (YIN)...")
-    stable_notes, stable_f0, stable_midi, sample_times = run_pipeline14(y, sr)
+    print(f"[INFO] Menjalankan Pipeline #14 ({PITCH_DETECTION_MODE})...")
+    stable_notes, stable_f0, stable_midi, sample_times, pitch_diag = run_pipeline14(
+        y,
+        sr,
+        return_diagnostics=True,
+    )
 
     duration = len(y) / sr
     f0_vis = stable_f0
@@ -544,22 +874,30 @@ def run_app() -> None:
         )
         print(f"[WARN] Modul viz gagal, pakai fallback sederhana. Disimpan: {out_png} ({e})")
 
-    df0 = _build_dataframe_from_stable(stable_f0, stable_notes, stable_midi)
+    df0 = _build_dataframe_from_stable(
+        stable_f0,
+        stable_notes,
+        stable_midi,
+        sample_times,
+        pitch_confidence=pitch_diag.get("pitch_confidence"),
+        pitch_mode=pitch_diag.get("pitch_mode", PITCH_DETECTION_MODE),
+        octave_corrected=pitch_diag.get("octave_corrected"),
+    )
     if len(df0) == 0:
         print(f"[SKIP] {wav_path.name}: no valid notes")
         out_csv = out_dir / f"{wav_path.stem}_lstm_mapped.csv"
         pd.DataFrame(
-            columns=["hz", "note", "midi", "string", "fret", "token_idx"],
+            columns=NOTE_OUTPUT_COLUMNS,
         ).to_csv(out_csv, index=False, encoding="utf-8-sig")
         print(f"[OK] Empty CSV disimpan ke: {out_csv}")
         return
 
-    df = _collapse_to_sustains(df0)
+    df = _collapse_to_sustains(df0, onset_times=onset_times)
     if len(df) == 0:
         print(f"[SKIP] {wav_path.name}: no sustained notes after RLE")
         out_csv = out_dir / f"{wav_path.stem}_lstm_mapped.csv"
         pd.DataFrame(
-            columns=["hz", "note", "midi", "string", "fret", "token_idx"],
+            columns=NOTE_OUTPUT_COLUMNS,
         ).to_csv(out_csv, index=False, encoding="utf-8-sig")
         print(f"[OK] Empty CSV disimpan ke: {out_csv}")
         return
@@ -573,7 +911,7 @@ def run_app() -> None:
         use_pitch_mask=True,
     )
 
-    cols = ["hz", "note", "midi", "string", "fret", "token_idx"]
+    cols = NOTE_OUTPUT_COLUMNS
     cols = [c for c in cols if c in df_out.columns]
     out_csv = out_dir / f"{wav_path.stem}_lstm_mapped.csv"
     df_out[cols].to_csv(out_csv, index=False, encoding="utf-8-sig")

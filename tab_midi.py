@@ -109,6 +109,21 @@ def _parse_midi_cell(cell: str) -> Optional[int]:
     return None
 
 
+def _parse_float_cell(cell: str) -> Optional[float]:
+    if cell is None:
+        return None
+    s = str(cell).strip()
+    if not s:
+        return None
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    if v != v or v in (float("inf"), float("-inf")):
+        return None
+    return v
+
+
 def csv_to_midi_sequence(
     csv_path: Path,
     midi_col: str = "midi",
@@ -129,7 +144,7 @@ def csv_to_midi_sequence(
 
     seq: List[Optional[int]] = []
 
-    with csv_path.open("r", encoding="utf-8", newline="") as f:
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f)
         try:
             header = next(reader)
@@ -155,6 +170,77 @@ def csv_to_midi_sequence(
             seq.append(midi)
 
     return seq
+
+
+def csv_to_timed_midi_events(
+    csv_path: Path,
+    midi_col: str = "midi",
+    start_col: str = "start_time",
+    end_col: str = "end_time",
+    duration_col: str = "duration",
+    rest_policy: str = "keep",
+) -> Optional[List[Tuple[Optional[int], float, float]]]:
+    """
+    Read CSV into timed monophonic events: (midi_or_None, start_sec, duration_sec).
+
+    Returns None when timing columns are unavailable so callers can fall back to
+    fixed-step legacy MIDI generation.
+    """
+    csv_path = Path(csv_path)
+    if rest_policy not in ("keep", "skip"):
+        raise ValueError("rest_policy must be 'keep' or 'skip'")
+
+    events: List[Tuple[Optional[int], float, float]] = []
+
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f)
+        try:
+            header = next(reader)
+        except StopIteration:
+            return []
+
+        header_lower = [h.strip().lower() for h in header]
+        if midi_col.lower() not in header_lower:
+            raise ValueError(f"Kolom '{midi_col}' tidak ditemukan di CSV: {csv_path}")
+
+        midi_idx = header_lower.index(midi_col.lower())
+        start_idx = header_lower.index(start_col.lower()) if start_col.lower() in header_lower else None
+        end_idx = header_lower.index(end_col.lower()) if end_col.lower() in header_lower else None
+        duration_idx = (
+            header_lower.index(duration_col.lower())
+            if duration_col.lower() in header_lower
+            else None
+        )
+
+        if start_idx is None or (end_idx is None and duration_idx is None):
+            return None
+
+        for row in reader:
+            if not row or all(c.strip() == "" for c in row):
+                continue
+
+            midi = _parse_midi_cell(row[midi_idx] if midi_idx < len(row) else "")
+            if midi is None and rest_policy == "skip":
+                continue
+
+            start = _parse_float_cell(row[start_idx] if start_idx < len(row) else "")
+            if start is None:
+                continue
+
+            duration = None
+            if duration_idx is not None and duration_idx < len(row):
+                duration = _parse_float_cell(row[duration_idx])
+            if duration is None and end_idx is not None and end_idx < len(row):
+                end = _parse_float_cell(row[end_idx])
+                if end is not None:
+                    duration = end - start
+
+            if duration is None or duration <= 0:
+                continue
+
+            events.append((midi, max(0.0, start), max(0.0, duration)))
+
+    return events
 
 
 # ===================== MIDI Writer (Monophonic) =====================
@@ -226,6 +312,66 @@ def write_midi_from_mono_sequence(
     return out_mid_path
 
 
+def write_midi_from_timed_events(
+    timed_events: Sequence[Tuple[Optional[int], float, float]],
+    out_mid_path: Path,
+    config: MidiRenderConfig = MidiRenderConfig(),
+) -> Path:
+    """
+    Write a single-track MIDI from timed monophonic events.
+
+    Event times are in seconds. Tempo still comes from notes_per_second so older
+    render settings remain stable; seconds are converted into MIDI ticks using
+    the configured seconds-per-beat.
+    """
+    out_mid_path = Path(out_mid_path)
+    out_mid_path.parent.mkdir(parents=True, exist_ok=True)
+
+    us_per_beat = _tempo_us_per_beat(config.notes_per_second)
+    tpb = int(config.ticks_per_beat)
+    seconds_per_beat = 1.0 / float(config.notes_per_second)
+
+    events: List[Tuple[int, int, bytes]] = []
+    tempo_bytes = us_per_beat.to_bytes(3, "big", signed=False)
+    events.append((0, 0, b"\xFF\x51\x03" + tempo_bytes))
+
+    prog = max(0, min(127, int(config.program)))
+    events.append((0, 1, bytes([0xC0, prog])))
+
+    vel = max(1, min(127, int(config.velocity)))
+
+    for midi, start_sec, duration_sec in timed_events:
+        if midi is None:
+            continue
+        n = max(0, min(127, int(midi)))
+        start_tick = int(round((float(start_sec) / seconds_per_beat) * tpb))
+        dur_ticks = max(1, int(round((float(duration_sec) / seconds_per_beat) * tpb)))
+        end_tick = start_tick + dur_ticks
+
+        events.append((start_tick, 2, bytes([0x90, n, vel])))
+        events.append((end_tick, 1, bytes([0x80, n, 0])))
+
+    events.sort(key=lambda x: (x[0], x[1]))
+
+    track = bytearray()
+    last_tick = 0
+    for tick, _, msg in events:
+        delta = tick - last_tick
+        if delta < 0:
+            raise RuntimeError("Event ticks are not non-decreasing.")
+        track += _varlen(delta)
+        track += msg
+        last_tick = tick
+
+    track += _varlen(0) + b"\xFF\x2F\x00"
+
+    header = b"MThd" + _u32be(6) + _u16be(0) + _u16be(1) + _u16be(tpb)
+    trk = b"MTrk" + _u32be(len(track)) + bytes(track)
+
+    out_mid_path.write_bytes(header + trk)
+    return out_mid_path
+
+
 # ===================== Convenience API =====================
 
 def csv_notes_to_midi_file(
@@ -250,5 +396,13 @@ def csv_notes_to_midi_file(
         velocity=velocity,
         program=program,
     )
+    timed_events = csv_to_timed_midi_events(
+        csv_path,
+        midi_col=midi_col,
+        rest_policy=rest_policy,
+    )
+    if timed_events is not None:
+        return write_midi_from_timed_events(timed_events, out_mid_path, config=cfg)
+
     seq = csv_to_midi_sequence(csv_path, midi_col=midi_col, rest_policy=rest_policy)
     return write_midi_from_mono_sequence(seq, out_mid_path, config=cfg)

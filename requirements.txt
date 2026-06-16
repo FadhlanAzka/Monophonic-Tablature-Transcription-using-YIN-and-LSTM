@@ -1,0 +1,11 @@
+flask
+librosa
+matplotlib
+numpy
+pandas
+pygame
+scikit-learn
+scipy
+soundfile
+torch
+pytest

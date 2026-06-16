@@ -33,6 +33,11 @@ import matplotlib.pyplot as plt
 import tkinter as tk
 from tkinter import filedialog
 
+try:
+    from evaluation.music_metrics import compute_token_musical_metrics
+except Exception:
+    from music_metrics import compute_token_musical_metrics
+
 
 # =============================================================================
 # TKINTER PATH SELECTION
@@ -249,6 +254,24 @@ def main():
         "f1": f1_score(y_true, y_pred, average="weighted", zero_division=0),
         "num_tokens_test": int(len(y_true))
     }
+
+    token_index_cols = [c for c in ["token_idx", "midi", "string", "fret"] if c in df_test.columns]
+    if "token_idx" in token_index_cols:
+        token_index_df = (
+            df_test[token_index_cols]
+            .drop_duplicates(subset=["token_idx"])
+            .sort_values("token_idx")
+            .reset_index(drop=True)
+        )
+    else:
+        token_index_df = pd.DataFrame(columns=["token_idx", "midi", "string", "fret"])
+
+    musical_metrics = compute_token_musical_metrics(
+        y_true,
+        y_pred,
+        token_index_df,
+    )
+    metrics.update(musical_metrics)
 
     # =============================================================================
     # TP FP FN (TOKEN-BASED)
