@@ -1,1 +1,7 @@
-/__pycache__
+# Python compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Generated/static runtime artifacts
+static/
